@@ -1,17 +1,34 @@
+// стандартная
 #include <Wire.h>
+// https://github.com/adafruit/Adafruit_BME280_Library
 #include <Adafruit_BME280.h>
+// https://github.com/claws/BH1750
 #include <BH1750.h>
+// https://github.com/tzapu/WiFiManager
 #include <WiFiManager.h>
+// https://github.com/knolleary/pubsubclient
 #include <PubSubClient.h>
+// https://github.com/wayoda/LedControl
 #include "LedControl.h"
 
+// имя сети и пароль для первоначальной настройки сети
+#define WIFI_SSID             ("WeatherStation")
+#define WIFI_PASS             ("12345678")
+// для вычисления примерной высоты (высоту оставил просто ради прикола)
 #define SEALEVELPRESSURE_HPA  (1013.25)
+// для перевода паскалей в мм/рт. ст.
 #define  MMHG_PASCAL          (133.322368)
+// размер буфера для формирования MQTT-сообщения
 #define MSG_BUFFER_SIZE       (128)
+// отправлять сообщения серверу раз в 5 минут
 #define PUB_DELAY             (60000*5)
 //#define PUB_DELAY             (15)
+// хост, порт, имя пользователя и пароль MQTT-брокера
+#define MQTT_HOST             ("192.168.1.127")
+#define MQTT_PORT             (1883)
 #define MQTT_USER             ("raven")
 #define MQTT_PASS             ("bynthytn")
+// кнопка подключена к D5
 #define buttonPin             (D5)
 
 BH1750 lightMeter;
@@ -19,14 +36,30 @@ Adafruit_BME280 bme;
 WiFiManager wm;
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
+// true - датчики инициализированы
 bool init_sensors = false;
+// таймеры, чтобы не пользоваться delay
 unsigned long timer = 0, disptimer = 0, gettimer = 0;
+// буфер для формирования сообщения MQTT
 char msg[MSG_BUFFER_SIZE];
-int value = 0;
+// Pin D6 <==> LOAD
+// Pin D7 <==> CLK
+// Pin D8 <==> DIN
 LedControl lc = LedControl(D8, D7, D6, 1);
+// буфер для сообщения на экран
 char disp[8];
+// датчики true = ок, false = error
 bool bme_ok = true, bh_ok = true;
-//
+int rain = 1024;
+int lux  = -1;
+int humi = -1;
+int alt = -1000;
+int press = -1;
+int temp = -100;
+// переменные для кнопки
+int buttonState, buttonCount = 0;
+
+// коллбэк режима настройки сети, выводим сообщение на экран
 void configModeCallback(WiFiManager *myWiFiManager)
 {
   Serial.println("Entered config mode");
@@ -34,7 +67,7 @@ void configModeCallback(WiFiManager *myWiFiManager)
   Serial.println(myWiFiManager->getConfigPortalSSID());
   displayMsg("nS  0000");
 }
-//
+// вывод 4 символов в одну половину экрана (0 - левая, 1 - правая)
 void display4(int n)
 {
   for (int i=0; i<4; i++)
@@ -42,7 +75,7 @@ void display4(int n)
     lc.setChar(0, 7-(n*4)-i, disp[i], false);
   }
 }
-// Вывод содержимого буфера на дисплей
+// Вывод содержимого буфера на дисплей, все 8 символов
 void displayBuf()
 {
   for (int i=0; i<8; i++)
@@ -50,7 +83,8 @@ void displayBuf()
     lc.setChar(0, 7-i, disp[i], false);
   }  
 }
-
+// коллбэк когда приходит сообщение от MQTT-брокера
+// Пока не используется, в дальнейшем будет использоваться для управления погодной станцией через веб-интерфейс
 void mqttCallback(char* topic, byte* payload, unsigned int length)
 {
   Serial.print("Message arrived [");
@@ -62,13 +96,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
   }
   Serial.println();
 }
-
+// вывод строки на экран
 void displayMsg(String msg)
 {
   sprintf(disp, "%s", msg);
   displayBuf();
 }
-
+// подключение к MQTT-брокеру (если еще не подключено)
 void mqttReconnect()
 {
   lc.setChar(0, 3, 'n', false);
@@ -97,7 +131,7 @@ void mqttReconnect()
     }
   }
 }
-
+// Вывод на экран приветствия HELLO (не несет никакой функциональной нагрузки)
 void displayHELLO()
 {
   lc.setChar(0, 7, 'H', false);
@@ -128,18 +162,23 @@ void displayHELLO()
 void setup()
 {
   pinMode(buttonPin, INPUT);
+  // инициализация датчиков
   initSensors();
-  // Инициализация 7-сегментного 8-символьного дисплея
+  // выводим дисплей из спящего режима, в котором он по умолчанию
   lc.shutdown(0, false);
+  // второй параметр - яркость дисплея, от 0 до 5
   lc.setIntensity(0, 0);
   lc.clearDisplay(0);
   displayHELLO();
+  // включаем режим WiFi станции
   WiFi.mode(WIFI_STA);
   Serial.begin(115200);
-  //wm.resetSettings();
+  // если соединение с сетью потеряно, автоматически реконнектимся
   wm.setWiFiAutoReconnect(true);
+  // когда входим в режим настроек сети, выводим об этом сообщение
   wm.setAPCallback(configModeCallback);
-  if (!wm.autoConnect("WeatherStation","12345678"))
+  // 
+  if (!wm.autoConnect(WIFI_SSID, WIFI_PASS))
   {
     Serial.println("Connecting to WiFi Failed");
     displayMsg("n 00    ");
@@ -151,18 +190,12 @@ void setup()
     displayMsg("n 01    ");
     delay(1000);
   }
-  mqtt.setServer("192.168.1.127", 1883);
+  // задаем настройки MQTT
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
   mqttReconnect();
 }
-
-int rain = 1024;
-int lux  = -1;
-int humi = -1;
-int alt = -1000;
-int press = -1;
-int temp = -100;
-
+// логирование данных погоды в консоль, для отладки
 void logWeather()
 {
   Serial.print("Rain = ");
@@ -179,9 +212,10 @@ void logWeather()
   Serial.println(humi);
   Serial.println();
 }
-
+// получить данные с датчиков
 void getWeather()
 {
+  // если датчики не инициализированы, делаем это
   if (!init_sensors)
     initSensors();
   rain = analogRead(A0);
@@ -190,14 +224,17 @@ void getWeather()
   alt = bme.readAltitude(SEALEVELPRESSURE_HPA);
   press = (int)(bme.readPressure() / MMHG_PASCAL);
   temp = bme.readTemperature();
+  // если датчики выдают марсианские значения (например, температура выше 100), пробуем инициализировать их заново
+  // потому что возможно, соединение с одним из них было потеряно
   if (temp > 100 || press < 0)
   {
     initSensors();
   }
 }
-
+// отправляем данные погоды MQTT-брокеру
 void publishWeather()
 {
+  // если датчики не инициализированы, ничего отправлять не нужно (все равно данные не актуальны)
   if (!init_sensors)
     return;
   // перед отправкой сообщения MQTT-брокеру, выводим букву "n" в последнем столбце
@@ -230,9 +267,11 @@ void publishWeather()
 
 void initSensors()
 {
+  // если датчики уже инициализированы, ничего не делаем
   if (init_sensors)
     return;
   Wire.begin();
+  // у BME280 жестко прошит адрес 0x76
   if (!bme.begin(0x76))
   {
     bme_ok = false;
@@ -252,6 +291,7 @@ void initSensors()
   pinMode(A0, INPUT);  
   if (bme_ok && bh_ok)
   {
+    // если оба датчика инициализированы, устанавливаем флаг
     init_sensors = true;
   }
   else
@@ -259,7 +299,7 @@ void initSensors()
     delay(3000);
   }
 }
-
+// выводим температуру и влажность на экран
 void displayTempHumi()
 {
   if (init_sensors)
@@ -270,7 +310,7 @@ void displayTempHumi()
     display4(1);
   }
 }
-
+// выводим атмосферное давление и дождь на экран
 void displayPressRain()
 {
   if (init_sensors)
@@ -282,10 +322,9 @@ void displayPressRain()
   }
 }
 
-int buttonState, buttonCount = 0;
-
 void loop()
 {
+  // опрашиваем датчики, а также кнопку, один раз в секунду
   if (gettimer == 0 || millis() - gettimer > 1000)
   {
     gettimer = millis();
@@ -293,37 +332,44 @@ void loop()
     buttonState = digitalRead(buttonPin);
     if (buttonState == 1)
     {
+      // если кнопка нажата, считаем сколько секунд
       buttonCount++;
     }
     else
     {
+      // если отпущена, сбрасываем счетчик
       buttonCount = 0;
     }
+    // если кнопка нажата более 8 секунд
     if (buttonCount > 8)
     {
+      // сбрасываем настройки сети
       wm.resetSettings();
+      // выводим сообщение 00000000
       displayMsg("00000000");
       delay(5000);
+      // перезагружаем микроконтроллер
       ESP.reset();
     }
-    //Serial.print("ButtonCount = ");
-    //Serial.println(buttonCount);
   }
   // держим соединение с MQTT брокером открытым
   mqtt.loop();
+  // раз в 5 минут отправляем данные MQTT-брокеру
   if (timer == 0 || millis() - timer > PUB_DELAY)
   {
     timer = millis(); 
     publishWeather();
   }
-  
+  // певые 5 секунд показываем температуру и влажность
   if (millis() - disptimer >= 5000 && millis() - disptimer < 10000)
   {
     displayTempHumi();
     delay(100);
   }
+  // вторые 5 секунд показываем давление и дождь
   if (millis() - disptimer >= 10000 && millis() - disptimer < 15000)
   {
+    // а также записываем все данные в консоль для отладки
     logWeather();
     displayPressRain();
     disptimer = millis();
