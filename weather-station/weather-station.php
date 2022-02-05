@@ -1,14 +1,15 @@
 <?php
 require 'vendor/autoload.php';
 
-define('MQTT_HOST',	 '192.168.1.127');
-define('MQTT_PORT',  1883);
-define('MQTT_USER',	 'raven');
-define('MQTT_PASS',	 'bynthytn');
-define('MQTT_CL_ID', 'weather-station-8112');
-define('DB_USER',    'raven');
-define('DB_PASS',    'bynthytn');
-define('DB_NAME',    'dacha');
+define('MQTT_HOST',	'192.168.1.127');
+define('MQTT_PORT', 1883);
+define('MQTT_USER',	'raven');
+define('MQTT_PASS',	'bynthytn');
+define('MQTT_CL_ID','weather-station-8112');
+define('DB_USER',   'raven');
+define('DB_PASS',   'bynthytn');
+define('DB_NAME',   'dacha');
+define('DB_HOST',   'localhost');
 
 use PhpMqtt\Client\ConnectionSettings;
 use PhpMqtt\Client\Exceptions\MqttClientException;
@@ -17,6 +18,7 @@ use PhpMqtt\Client\MqttClient;
 DB::$user       = DB_USER;
 DB::$password   = DB_PASS;
 DB::$dbName     = DB_NAME;
+DB::$host       = DB_HOST;
 
 try
 {
