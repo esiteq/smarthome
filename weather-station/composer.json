@@ -1,0 +1,6 @@
+{
+    "require": {
+        "php-mqtt/client": "^1.1",
+        "sergeytsalkov/meekrodb": "^2.4"
+    }
+}

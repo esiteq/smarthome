@@ -1,0 +1,22 @@
+[Unit]
+Description=Weather Station Service
+Requires=mysqld.service
+After=mysqld.service
+
+[Service]
+User=root
+Type=simple
+TimeoutSec=0
+PIDFile=/var/run/weahter-station.pid
+ExecStart=/usr/bin/php -f /var/www/dacha/weather-station/weather-station.php > /dev/null
+#ExecStop=/bin/kill -HUP $MAINPID
+#ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+
+Restart=on-failure
+RestartSec=42s
+
+StandardOutput=null
+StandardError=/var/log/myphpdaemon.log
+[Install]
+WantedBy=default.target
