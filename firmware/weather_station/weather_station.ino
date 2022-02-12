@@ -1,8 +1,8 @@
-/*
- * Author: Alex Bugrov
- * Creation date: 2022-02-04
- * Version: 0.2
- * /
+//
+// Author: Alex Bugrov
+// Creation date: 2022-02-04
+// Version: 0.2
+//
 // стандартная
 #include <Wire.h>
 // https://github.com/adafruit/Adafruit_BME280_Library
