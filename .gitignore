@@ -1,3 +1,5 @@
-
+sb-admin
+wp
 *.log
-weather-station/weather-station.log
+weather-station/*.log
+

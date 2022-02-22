@@ -1,7 +1,7 @@
 //
 // Author: Alex Bugrov
 // Creation date: 2022-02-04
-// Version: 0.2
+// Version: 0.3
 //
 // стандартная
 #include <Wire.h>
@@ -15,8 +15,11 @@
 #include <PubSubClient.h>
 // https://github.com/wayoda/LedControl
 #include "LedControl.h"
+#include "Arduino.h"
+#include "uTimerLib.h"
 
 // имя сети и пароль для первоначальной настройки сети
+#define VER                   (103)
 #define WIFI_SSID             ("WeatherStation")
 #define WIFI_PASS             ("12345678")
 // для вычисления примерной высоты (высоту оставил просто ради прикола)
@@ -35,7 +38,9 @@
 #define MQTT_PASS             ("bynthytn")
 // кнопка подключена к D5
 #define buttonPin             (D5)
+#define rainPin               (A0)
 
+int fw_version = VER;
 BH1750 lightMeter;
 Adafruit_BME280 bme;
 WiFiManager wm;
@@ -43,8 +48,6 @@ WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 // true - датчики инициализированы
 bool init_sensors = false;
-// таймеры, чтобы не пользоваться delay
-unsigned long timer = 0, disptimer = 0, gettimer = 0;
 // буфер для формирования сообщения MQTT
 char msg[MSG_BUFFER_SIZE];
 // Pin D6 <==> LOAD
@@ -62,7 +65,7 @@ int alt = -1000;
 int press = -1;
 int temp = -100;
 // переменные для кнопки
-int buttonState, buttonCount = 0, tempflag = 0, sendtimer = 0, senderrors;
+int buttonState, buttonCount = 0, send_timer = 0, senderrors = 0, publish_timer = 0, disp_timer = 0;
 
 // коллбэк режима настройки сети, выводим сообщение на экран
 void configModeCallback(WiFiManager *myWiFiManager)
@@ -70,7 +73,8 @@ void configModeCallback(WiFiManager *myWiFiManager)
   Serial.println("Entered config mode");
   Serial.println(WiFi.softAPIP());
   Serial.println(myWiFiManager->getConfigPortalSSID());
-  displayMsg("nS  0000");
+  sprintf(disp, "on  %4d", fw_version);
+  displayBuf();
 }
 // вывод 4 символов в одну половину экрана (0 - левая, 1 - правая)
 void display4(int n)
@@ -199,6 +203,8 @@ void setup()
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
   mqttReconnect();
+  // вызов обрабочика раз в секунду
+  TimerLib.setInterval_s(every_second, 1);
 }
 // логирование данных погоды в консоль, для отладки
 void logWeather()
@@ -223,7 +229,7 @@ void getWeather()
   // если датчики не инициализированы, делаем это
   if (!init_sensors)
     initSensors();
-  rain = analogRead(A0);
+  rain = analogRead(rainPin);
   lux = lightMeter.readLightLevel();
   humi = bme.readHumidity();
   alt = bme.readAltitude(SEALEVELPRESSURE_HPA);
@@ -255,10 +261,10 @@ void publishWeather()
   if (res)
   {
     Serial.println("Weather published successfully");
-    // если сообщение отправилось, печатаем "n 11" в правой половине экрана
-    sprintf(disp, "n 11");
+    // если сообщение отправилось, печатаем "8888" в правой половине экрана
+    sprintf(disp, "8888");
     display4(1);
-    sendtimer = 0;
+    send_timer = 0;
   }
   else
   {
@@ -268,8 +274,6 @@ void publishWeather()
     display4(1);
     senderrors++;
   }
-  // задержка в 3 секунды, чтобы успели прочитать сообщение
-  //delay(3000);
 }
 
 void initSensors()
@@ -303,7 +307,7 @@ void initSensors()
   }
   else
   {
-    delay(3000);
+    //
   }
 }
 // выводим температуру и влажность на экран
@@ -328,75 +332,80 @@ void displayPressRain()
     display4(1);
   }
 }
-
+//
 void displaySendTimer()
 {
   // выводим количество секунд с последней успешной отправки данных на правый дисплей
-  sprintf(disp, "%4d", sendtimer);
+  sprintf(disp, "%4d", send_timer);
   display4(0);
   sprintf(disp, "%4d", senderrors);
   display4(1);
 }
+//
+void displayWeather()
+{
+  // первые 5 секунд показываем температуру и влажность
+  if (disp_timer >= 0 && disp_timer < 5)
+  {
+    displayTempHumi();
+  }
+  if (disp_timer >= 5 && disp_timer < 10)
+  {
+    // вторые 5 секунд показываем давление и дождь, а также пишем лог в консоль
+    logWeather();
+    displayPressRain();
+  }
+  if (disp_timer >= 10 && disp_timer < 15)
+  {
+    displaySendTimer();
+  }
+  if (disp_timer >= 15)
+  {
+    disp_timer = 0;
+  }
+  disp_timer++;
+}
+
+void every_second()
+{
+  if (publish_timer >= 900)
+  {
+    publishWeather();
+    publish_timer = 0;
+  }
+  // опрашиваем датчики, а также кнопку, один раз в секунду
+  getWeather();
+  displayWeather();
+  buttonState = digitalRead(buttonPin);
+  if (buttonState == 1)
+  {
+    // если кнопка нажата, считаем сколько секунд
+    buttonCount++;
+    displaySendTimer();
+  }
+  else
+  {
+    // если отпущена, сбрасываем счетчик
+    buttonCount = 0;
+  }
+  // если кнопка нажата более 8 секунд
+  if (buttonCount > 8)
+  {
+    // сбрасываем настройки сети
+    wm.resetSettings();
+    // выводим сообщение 00000000
+    displayMsg("00000000");
+    delay(5000);
+    // перезагружаем микроконтроллер
+    ESP.reset();
+  }
+  send_timer++;
+  publish_timer++;
+  // держим соединение с MQTT брокером открытым
+  mqtt.loop();
+}
 
 void loop()
 {
-  // опрашиваем датчики, а также кнопку, один раз в секунду
-  if (gettimer == 0 || millis() - gettimer > 1000)
-  {
-    gettimer = millis();
-    getWeather();
-    buttonState = digitalRead(buttonPin);
-    if (buttonState == 1)
-    {
-      // если кнопка нажата, считаем сколько секунд
-      buttonCount++;
-      displaySendTimer();
-    }
-    else
-    {
-      // если отпущена, сбрасываем счетчик
-      buttonCount = 0;
-    }
-    // если кнопка нажата более 8 секунд
-    if (buttonCount > 8)
-    {
-      // сбрасываем настройки сети
-      wm.resetSettings();
-      // выводим сообщение 00000000
-      displayMsg("00000000");
-      delay(5000);
-      // перезагружаем микроконтроллер
-      ESP.reset();
-    }
-    // количество секунд с последней отправки
-    sendtimer++;
-  }
-  // держим соединение с MQTT брокером открытым
-  mqtt.loop();
-  // раз в 5 минут отправляем данные MQTT-брокеру
-  if (timer == 0 || millis() - timer > PUB_DELAY)
-  {
-    timer = millis(); 
-    publishWeather();
-  }
-  // певые 5 секунд показываем температуру и влажность
-  if (millis() - disptimer >= 5000 && millis() - disptimer < 10000)
-  {
-    // если температура еще не выводилась в этом цикле
-    if (tempflag == 0)
-    {
-      displayTempHumi();
-    }
-    tempflag++;
-  }
-  // вторые 5 секунд показываем давление и дождь
-  if (millis() - disptimer >= 10000 && millis() - disptimer < 15000)
-  {
-    // а также записываем все данные в консоль для отладки
-    logWeather();
-    displayPressRain();
-    disptimer = millis();
-    tempflag = 0;
-    //delay(100);
-  }
+  //
 }
